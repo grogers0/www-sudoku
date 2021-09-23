@@ -1,0 +1,10 @@
+* {
+    cursor: default;
+    user-select: none;
+}
+
+#game-line {
+    font-family: monospace;
+    font-size: smaller;
+    user-select: auto;
+}
