@@ -62,10 +62,14 @@ function Board() {
         }
     }
 
-    this.setValue = function(pos, v) {
+    this.setValue = function(pos, v, undoRedo) {
         this.knowns[pos] = v;
+
+        undoRedo.undo.push(() => { this.knowns[pos] = undefined });
+        undoRedo.redo.push(() => { this.knowns[pos] = v });
+
         for (const i of VAL) {
-            this.excludeCandidate(pos, i);
+            this.excludeCandidate(pos, i, undoRedo);
         }
         // Eliminate neighbors
         for (const pos2 of POS) {
@@ -73,24 +77,29 @@ function Board() {
                 COL[pos] == COL[pos2] ||
                 BOX[pos] == BOX[pos2])
             {
-                this.excludeCandidate(pos2, v);
+                this.excludeCandidate(pos2, v, undoRedo);
             }
         }
     }
 
-    this.excludeCandidate = function(pos, v) {
-        this.candidates[pos][v] = false;
+    this.excludeCandidate = function(pos, v, undoRedo) {
+        if (this.candidates[pos][v]) {
+            this.candidates[pos][v] = false;
+
+            undoRedo.undo.push(() => { this.candidates[pos][v] = true });
+            undoRedo.redo.push(() => { this.candidates[pos][v] = false });
+        }
     }
 }
 
 
 function parseLine(line) {
-    var board = new Board();
+    let board = new Board();
     for (var i = 0; i < line.length; i++) {
         if (i >= POS.length) { break } // Too much input, just use the valid prefix
         let ch = line.charAt(i);
         if (ch >= '1' && ch <= '9') {
-            board.setValue(i, parseInt(ch) - 1);
+            board.setValue(i, parseInt(ch) - 1, new UndoRedo());
             board.givens[i] = true;
         } else {
             // Ignored as unset (typically '.' or '_' or '0')
@@ -155,6 +164,26 @@ function newFilters() {
     return filters;
 }
 
+function LastClick() {
+    this.time = undefined;
+    this.pos = undefined;
+    this.val = undefined;
+
+    // Returns true if a double click
+    this.click = function(pos, val) {
+        let now = new Date().getTime();
+        if (pos == this.pos && val == this.val && now - this.time < 500) {
+            this.time = now;
+            return true;
+        } else {
+            this.pos = pos;
+            this.val = val;
+            this.time = now;
+            return false;
+        }
+    }
+}
+
 function GameState() {
     this.board = new Board();
     this.filters = newFilters();
@@ -162,6 +191,9 @@ function GameState() {
     for (const pos of POS) {
         this.selected[pos] = false;
     }
+    this.undo = [];
+    this.redo = [];
+    this.lastClick = new LastClick();
 
     this.boardUpdated = function() {
         for (const filter of this.filters) {
@@ -172,14 +204,54 @@ function GameState() {
     };
 }
 
+function UndoRedo() {
+    this.undo = [];
+    this.redo = [];
+}
+
+function isHiddenSingle(board, pos, val) {
+    function isHiddenSingleInHouse(board, pos, val, house) {
+        for (const pos2 of POS) {
+            if (pos == pos2) { continue }
+            if (house[pos] != house[pos2]) { continue }
+            if (board.candidates[pos2][val]) { return false }
+        }
+        return true;
+    }
+
+    return isHiddenSingleInHouse(board, pos, val, ROW) ||
+        isHiddenSingleInHouse(board, pos, val, COL) ||
+        isHiddenSingleInHouse(board, pos, val, BOX);
+}
+
 function onCellClick(state, pos, shiftOrCtrlKey) {
-    if (!state.selected[pos]) {
+    let dblClick = state.lastClick.click(pos, undefined);
+    if (dblClick && state.board.candidates[pos].filter(c => c).length == 1) {
+        // Double clicking anywhere in the cell of a naked single sets the value
+        const undoRedo = new UndoRedo();
+        state.board.setValue(pos, VAL.filter(val => state.board.candidates[pos][val])[0], undoRedo);
+        state.selected[pos] = false;
+        state.undo.push(undoRedo);
+        state.redo = [];
+    } else if (dblClick && state.filters.filter(f => f.selected).length == 1 && isHiddenSingle(state.board, pos, VAL.filter(val => state.filters[val].selected)[0])) {
+        // Double clicking anywhere in the cell of a hidden single while filtering for that value sets the value
+        const undoRedo = new UndoRedo();
+        state.board.setValue(pos, VAL.filter(val => state.filters[val].selected)[0], undoRedo);
+        state.selected[pos] = false;
+        state.undo.push(undoRedo);
+        state.redo = [];
+    } else if (!state.selected[pos]) {
         if (!shiftOrCtrlKey) {
             for (const pos2 of POS) {
                 state.selected[pos2] = false;
             }
         }
-        state.selected[pos] = true;
+        if (state.board.knowns[pos] == undefined) {
+            state.selected[pos] = true;
+        } else {
+            // Clicking a known cell acts like clicking that filter
+            state.filters[state.board.knowns[pos]].onClick(state, shiftOrCtrlKey);
+        }
     } else if (shiftOrCtrlKey) {
         state.selected[pos] = false;
     } else if (POS.some(pos2 => pos != pos2 && state.selected[pos2])) {
@@ -194,6 +266,7 @@ function onCellClick(state, pos, shiftOrCtrlKey) {
 }
 
 function render(state) {
+    state.boardUpdated();
     document.getElementById("game").replaceChildren(
         renderBoard(state),
         document.createElement("br"),
@@ -238,6 +311,21 @@ function renderFilters(state) {
     return table;
 }
 
+function knownSeesItself(board, pos) {
+    for (const pos2 of POS) {
+        if (ROW[pos] == ROW[pos2] ||
+            COL[pos] == COL[pos2] ||
+            BOX[pos] == BOX[pos2])
+        {
+            if (pos == pos2) { continue }
+            if (board.knowns[pos] == board.knowns[pos2]) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
 function renderBoard(state) {
     function renderCell(pos) {
         let div = document.createElement("div");
@@ -270,7 +358,9 @@ function renderBoard(state) {
 
         if (state.board.knowns[pos] !== undefined) {
             div.style.fontSize = "45px";
-            if (state.board.givens[pos]) {
+            if (knownSeesItself(state.board, pos)) {
+                div.style.color = "red";
+            } else if (state.board.givens[pos]) {
                 div.style.color = "blue";
             }
             div.appendChild(document.createTextNode(state.board.knowns[pos] + 1));
@@ -314,7 +404,7 @@ function renderBoard(state) {
         var tr = table.insertRow();
         if (row % 3 == 0) { tr.style.borderTop = "2px solid" }
         for (var col = 0; col < 9; col++) {
-            let pos = row*9 + col;
+            const pos = row*9 + col;
 
             let td = tr.insertCell();
             td.style.padding = "0";
@@ -333,7 +423,6 @@ function startGameFromLine() {
     board = parseLine(line);
     gameState = new GameState();
     gameState.board = board;
-    gameState.boardUpdated();
 
     render(gameState);
 }
@@ -362,22 +451,46 @@ function onKeyDown(ev) {
         state.filters[keyNum(ev.key)].onClick(state, shiftOrCtrlKey);
     } else if (keyNum(ev.key) != undefined) {
         ev.preventDefault();
+        const undoRedo = new UndoRedo();
         for (const pos in POS) {
             if (state.selected[pos]) {
                 if (shiftOrCtrlKey) {
-                    state.board.excludeCandidate(pos, keyNum(ev.key));
+                    state.board.excludeCandidate(pos, keyNum(ev.key), undoRedo);
                 } else {
-                    state.board.setValue(pos, keyNum(ev.key));
+                    state.board.setValue(pos, keyNum(ev.key), undoRedo);
+                    state.selected[pos] = false;
                 }
             }
         }
-        state.boardUpdated();
+        state.undo.push(undoRedo);
+        state.redo = [];
         render(state);
-        // FIXME - undo/redo
+    } else if (ev.key == "ArrowLeft" || (ev.ctrlKey && ev.key == "z")) {
+        ev.preventDefault();
+        const undoRedo = state.undo.pop();
+        if (undoRedo != undefined) {
+            state.redo.push(undoRedo);
+            for (const undo of undoRedo.undo) {
+                undo();
+            }
+            render(state);
+        }
+    } else if (ev.key == "ArrowRight" || (ev.ctrlKey && ev.key == "y")) {
+        ev.preventDefault();
+        const undoRedo = state.redo.pop();
+        if (undoRedo != undefined) {
+            state.undo.push(undoRedo);
+            for (const redo of undoRedo.redo) {
+                redo();
+            }
+            render(state);
+        }
     } else {
         logEvent(ev);
     }
 }
+
+
 
 document.addEventListener("keydown", onKeyDown)
 //document.addEventListener("keyup", logEvent)
