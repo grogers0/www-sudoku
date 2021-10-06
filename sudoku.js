@@ -65,7 +65,7 @@ function Board() {
     this.setValue = function(pos, v) {
         this.knowns[pos] = v;
         for (const i of VAL) {
-            this.candidates[pos][i] = false;
+            this.excludeCandidate(pos, i);
         }
         // Eliminate neighbors
         for (const pos2 of POS) {
@@ -73,9 +73,13 @@ function Board() {
                 COL[pos] == COL[pos2] ||
                 BOX[pos] == BOX[pos2])
             {
-                this.candidates[pos2][v] = false;
+                this.excludeCandidate(pos2, v);
             }
         }
+    }
+
+    this.excludeCandidate = function(pos, v) {
+        this.candidates[pos][v] = false;
     }
 }
 
@@ -213,8 +217,8 @@ function renderFilters(state) {
         }
         div.appendChild(document.createTextNode(filter.displayText));
         div.addEventListener("click", function(ev) {
-            filter.onClick(state, ev.shiftKey || ev.ctrlKey)
             ev.preventDefault();
+            filter.onClick(state, ev.shiftKey || ev.ctrlKey)
         });
         return div;
     }
@@ -244,8 +248,8 @@ function renderBoard(state) {
         div.style.alignItems = "center";
         div.style.position = "relative";
         div.addEventListener("click", function(ev) {
-            onCellClick(state, pos, ev.shiftKey || ev.ctrlKey);
             ev.preventDefault();
+            onCellClick(state, pos, ev.shiftKey || ev.ctrlKey);
         });
 
         if (state.selected[pos]) {
@@ -334,23 +338,49 @@ function startGameFromLine() {
     render(gameState);
 }
 
+function keyNum(key) {
+    const SHIFT_NUMS = ["!", "@", "#", "$", "%", "^", "&", "*", "("];
+    if (key >= "1" && key <= "9") {
+        return parseInt(key) - 1;
+    } else if (SHIFT_NUMS.includes(key)) {
+        return SHIFT_NUMS.indexOf(key);
+    } else {
+        return undefined;
+    }
+}
+
 function onKeyDown(ev) {
     const shiftOrCtrlKey = ev.shiftKey || ev.ctrlKey;
     const altKey = ev.altKey;
     const state = gameState;
-    if (altKey && ev.key == "0") {
+    const hasSelected = state.selected.some(s => s);
+    if ((altKey || !hasSelected) && (ev.key == "0" || ev.key == ")")) {
+        ev.preventDefault();
         state.filters[9].onClick(state, shiftOrCtrlKey);
+    } else if ((altKey || !hasSelected) && keyNum(ev.key) != undefined) {
         ev.preventDefault();
-    } else if (altKey && ev.key > "0" && ev.key <= "9") {
-        state.filters[parseInt(ev.key) - 1].onClick(state, shiftOrCtrlKey);
+        state.filters[keyNum(ev.key)].onClick(state, shiftOrCtrlKey);
+    } else if (keyNum(ev.key) != undefined) {
         ev.preventDefault();
+        for (const pos in POS) {
+            if (state.selected[pos]) {
+                if (shiftOrCtrlKey) {
+                    state.board.excludeCandidate(pos, keyNum(ev.key));
+                } else {
+                    state.board.setValue(pos, keyNum(ev.key));
+                }
+            }
+        }
+        state.boardUpdated();
+        render(state);
+        // FIXME - undo/redo
     } else {
         logEvent(ev);
     }
 }
 
 document.addEventListener("keydown", onKeyDown)
-document.addEventListener("keyup", logEvent)
+//document.addEventListener("keyup", logEvent)
 document.addEventListener("click", logEvent)
 document.addEventListener("dblclick", logEvent)
 document.addEventListener("contextmenu", logEvent)
