@@ -95,43 +95,41 @@ function parseLine(line) {
     return board;
 }
 
-function Filters() {
-    function Filter(displayText, filters, cellMatches, candidateMatches, selectable) {
-        this.displayText = displayText;
-        this.filters = filters;
-        this.selected = false;
-        this.cellMatches = cellMatches;
-        this.candidateMatches = candidateMatches;
-        this.selectable = selectable;
-        this.onClick = function(board, ctrlClick) {
-            if (this.selectable(board)) {
-                if (!this.selected) {
-                    if (!ctrlClick) {
-                        for (const filter of filters) {
-                            filter.selected = false;
-                        }
-                    }
-                    this.selected = true;
-                } else if (ctrlClick) {
-                    this.selected = false;
-                } else if (Array.from(filters).some(f => f != this && f.selected)) {
-                    for (const filter of filters) {
+function Filter(displayText, cellMatches, candidateMatches, selectable) {
+    this.displayText = displayText;
+    this.selected = false;
+    this.cellMatches = cellMatches;
+    this.candidateMatches = candidateMatches;
+    this.selectable = selectable;
+    this.onClick = function(state, shiftOrCtrlKey) {
+        if (this.selectable(state.board)) {
+            if (!this.selected) {
+                if (!shiftOrCtrlKey) {
+                    for (const filter of state.filters) {
                         filter.selected = false;
                     }
-                    this.selected = true;
-                } else {
-                    this.selected = false; // If this is the only filter currently selected
                 }
-                render(board, filters);
+                this.selected = true;
+            } else if (shiftOrCtrlKey) {
+                this.selected = false;
+            } else if (state.filters.some(f => f != this && f.selected)) {
+                for (const filter of state.filters) {
+                    filter.selected = false;
+                }
+                this.selected = true;
+            } else {
+                this.selected = false; // If this is the only filter currently selected
             }
-        };
-    }
+            render(state);
+        }
+    };
+}
 
-    this.filters = [];
-    this[Symbol.iterator] = function() { return this.filters[Symbol.iterator](); };
+function newFilters() {
+    const filters = [];
 
     for (const i of VAL) {
-        this.filters.push(new Filter(`${i+1}`, this,
+        filters.push(new Filter(`${i+1}`,
             function(board, pos) {
                 return board.candidates[pos][i];
             }, function(board, pos, v) {
@@ -141,7 +139,7 @@ function Filters() {
             }));
     }
 
-    this.filters.push(new Filter("xy", this,
+    filters.push(new Filter("xy",
         function(board, pos) {
             return board.candidates[pos].filter(c => c).length == 2;
         }, function(board, pos, v) {
@@ -150,23 +148,55 @@ function Filters() {
             return true;
         }));
 
-    this.boardUpdated = function(board) {
+    return filters;
+}
+
+function GameState() {
+    this.board = new Board();
+    this.filters = newFilters();
+    this.selected = [];
+    for (const pos of POS) {
+        this.selected[pos] = false;
+    }
+
+    this.boardUpdated = function() {
         for (const filter of this.filters) {
-            if (filter.selected && !filter.selectable(board)) {
+            if (filter.selected && !filter.selectable(this.board)) {
                 filter.selected = false;
             }
         }
     };
 }
 
-function render(board, filters) {
-    document.getElementById("game").replaceChildren(
-        renderBoard(board, filters),
-        document.createElement("br"),
-        renderFilters(board, filters));
+function onCellClick(state, pos, shiftOrCtrlKey) {
+    if (!state.selected[pos]) {
+        if (!shiftOrCtrlKey) {
+            for (const pos2 of POS) {
+                state.selected[pos2] = false;
+            }
+        }
+        state.selected[pos] = true;
+    } else if (shiftOrCtrlKey) {
+        state.selected[pos] = false;
+    } else if (POS.some(pos2 => pos != pos2 && state.selected[pos2])) {
+        for (const pos2 of POS) {
+            state.selected[pos2] = false;
+        }
+        state.selected[pos] = true;
+    } else {
+        state.selected[pos] = false; // If this is the only cell currently selected
+    }
+    render(state);
 }
 
-function renderFilters(board, filters) {
+function render(state) {
+    document.getElementById("game").replaceChildren(
+        renderBoard(state),
+        document.createElement("br"),
+        renderFilters(state));
+}
+
+function renderFilters(state) {
     function renderFilter(filter) {
         let div = document.createElement("div");
         div.style.height = "40px";
@@ -174,15 +204,18 @@ function renderFilters(board, filters) {
         div.style.display = "flex";
         div.style.justifyContent = "center";
         div.style.alignItems = "center";
-        div.style.fontSize = "xx-large";
-        if (!filter.selectable(board)) {
+        div.style.fontSize = "40px";
+        if (!filter.selectable(state.board)) {
             div.style.color = "darkgray";
             div.style.backgroundColor = "lightgray";
         } else if (filter.selected) {
             div.style.backgroundColor = "lightgreen";
         }
         div.appendChild(document.createTextNode(filter.displayText));
-        div.addEventListener("click", function(ev) { filter.onClick(board, ev.ctrlKey) })
+        div.addEventListener("click", function(ev) {
+            filter.onClick(state, ev.shiftKey || ev.ctrlKey)
+            ev.preventDefault();
+        });
         return div;
     }
 
@@ -191,7 +224,7 @@ function renderFilters(board, filters) {
     table.style.borderCollapse = "collapse";
 
     var tr = table.insertRow();
-    for (const filter of filters) {
+    for (const filter of state.filters) {
         let td = tr.insertCell();
         td.style.border = "2px solid";
         td.style.padding = "0";
@@ -201,7 +234,7 @@ function renderFilters(board, filters) {
     return table;
 }
 
-function renderBoard(board, filters) {
+function renderBoard(state) {
     function renderCell(pos) {
         let div = document.createElement("div");
         div.style.height = "45px";
@@ -209,18 +242,34 @@ function renderBoard(board, filters) {
         div.style.display = "flex";
         div.style.justifyContent = "center";
         div.style.alignItems = "center";
+        div.style.position = "relative";
+        div.addEventListener("click", function(ev) {
+            onCellClick(state, pos, ev.shiftKey || ev.ctrlKey);
+            ev.preventDefault();
+        });
 
-        const anyFilters = filters.filters.some(f => f.selected);
-        if (anyFilters && filters.filters.filter(f => f.selected).every(f => f.cellMatches(board, pos))) {
+        if (state.selected[pos]) {
+            let borderDiv = document.createElement("div");
+            borderDiv.style.border = "4px solid yellow";
+            borderDiv.style.position = "absolute";
+            borderDiv.style.left = "0";
+            borderDiv.style.top = "0";
+            borderDiv.style.width = "37px"; // Outer width - 2*border width
+            borderDiv.style.height = "37px";
+            div.appendChild(borderDiv);
+        }
+
+        const anyFilters = state.filters.some(f => f.selected);
+        if (anyFilters && state.filters.filter(f => f.selected).every(f => f.cellMatches(state.board, pos))) {
             div.style.backgroundColor = "lightgreen";
         }
 
-        if (board.knowns[pos] !== undefined) {
-            div.style.fontSize = "xxx-large";
-            if (board.givens[pos]) {
+        if (state.board.knowns[pos] !== undefined) {
+            div.style.fontSize = "45px";
+            if (state.board.givens[pos]) {
                 div.style.color = "blue";
             }
-            div.appendChild(document.createTextNode(board.knowns[pos] + 1));
+            div.appendChild(document.createTextNode(state.board.knowns[pos] + 1));
         } else {
             var table = document.createElement("table");
             for (var i = 0; i < 3; i++) {
@@ -231,16 +280,16 @@ function renderBoard(board, filters) {
                     var innerdiv = document.createElement("div");
                     td.appendChild(innerdiv);
 
-                    innerdiv.style.height = "10px";
-                    innerdiv.style.width = "10px";
+                    innerdiv.style.height = "12px";
+                    innerdiv.style.width = "12px";
                     innerdiv.style.display = "flex";
                     innerdiv.style.justifyContent = "center";
                     innerdiv.style.alignItems = "center";
-                    innerdiv.style.fontSize = "small";
+                    innerdiv.style.fontSize = "12px";
 
                     let v = i*3 + j;
-                    if (board.candidates[pos][v]) {
-                        if (anyFilters && !filters.filters.some(f => f.selected && f.candidateMatches(board, pos, v))) {
+                    if (state.board.candidates[pos][v]) {
+                        if (anyFilters && !state.filters.some(f => f.selected && f.candidateMatches(state.board, pos, v))) {
                             innerdiv.style.color = "darkgray";
                         }
 
@@ -277,21 +326,37 @@ function renderBoard(board, filters) {
 
 function startGameFromLine() {
     let line = document.getElementById("game-line").value;
-    gameBoard = parseLine(line);
-    gameFilters = new Filters();
-    gameFilters.boardUpdated(gameBoard);
-    render(gameBoard, gameFilters);
+    board = parseLine(line);
+    gameState = new GameState();
+    gameState.board = board;
+    gameState.boardUpdated();
+
+    render(gameState);
 }
 
-document.addEventListener("keydown", logEvent)
+function onKeyDown(ev) {
+    const shiftOrCtrlKey = ev.shiftKey || ev.ctrlKey;
+    const altKey = ev.altKey;
+    const state = gameState;
+    if (altKey && ev.key == "0") {
+        state.filters[9].onClick(state, shiftOrCtrlKey);
+        ev.preventDefault();
+    } else if (altKey && ev.key > "0" && ev.key <= "9") {
+        state.filters[parseInt(ev.key) - 1].onClick(state, shiftOrCtrlKey);
+        ev.preventDefault();
+    } else {
+        logEvent(ev);
+    }
+}
+
+document.addEventListener("keydown", onKeyDown)
 document.addEventListener("keyup", logEvent)
 document.addEventListener("click", logEvent)
 document.addEventListener("dblclick", logEvent)
 document.addEventListener("contextmenu", logEvent)
 
-var gameBoard = new Board();
-var gameFilters = new Filters();
-render(gameBoard, gameFilters);
+var gameState = new GameState();
+render(gameState);
 
 // TODO - fill new game randomly and start it
 startGameFromLine();
